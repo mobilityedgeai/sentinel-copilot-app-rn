@@ -84,34 +84,89 @@ jobs:
         # Make gradlew executable
         chmod +x ./gradlew
         
-        # Create optimized gradle.properties
+        # Create optimized gradle.properties for CI/CD
         cat > gradle.properties << EOF
-        # Gradle optimization
-        org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError
+        # Gradle optimization for CI/CD
+        org.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=2g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
         org.gradle.parallel=true
         org.gradle.configureondemand=false
         org.gradle.daemon=false
-        org.gradle.caching=true
+        org.gradle.caching=false
+        org.gradle.workers.max=2
         
         # Android optimization
         android.useAndroidX=true
         android.enableJetifier=true
         android.enableR8.fullMode=false
         android.enableBuildCache=false
-        
-        # Disable unnecessary features
-        android.enableAapt2=true
         android.enableD8=true
+        android.enableAapt2=true
         android.enableIncrementalDesugaring=false
+        
+        # Disable unnecessary features for CI
+        android.enablePngCrunching=false
+        android.enableResourceOptimizations=false
+        android.enableSeparateAnnotationProcessing=false
+        
+        # Memory and performance
+        kapt.use.worker.api=false
+        kapt.incremental.apt=false
         EOF
         
-        echo "✅ Gradle configured"
+        echo "✅ Gradle configured for CI/CD"
         
-    - name: Build Debug APK
+    - name: Build Debug APK with retries
       run: |
         cd android
-        echo "🔨 Building debug APK..."
-        ./gradlew assembleDebug --stacktrace --info --no-daemon
+        
+        # Function to attempt build with different strategies
+        attempt_build() {
+          local strategy=$1
+          echo "🔨 Attempting build with strategy: $strategy"
+          
+          case $strategy in
+            "basic")
+              ./gradlew assembleDebug --no-daemon --stacktrace --info
+              ;;
+            "single-thread")
+              ./gradlew assembleDebug --no-daemon --stacktrace --info --max-workers=1
+              ;;
+            "minimal")
+              ./gradlew assembleDebug --no-daemon --stacktrace --quiet --no-parallel
+              ;;
+            "offline")
+              ./gradlew assembleDebug --no-daemon --stacktrace --offline --no-parallel
+              ;;
+          esac
+        }
+        
+        # Try different build strategies
+        if attempt_build "basic"; then
+          echo "✅ Basic build successful"
+        elif attempt_build "single-thread"; then
+          echo "✅ Single-thread build successful"  
+        elif attempt_build "minimal"; then
+          echo "✅ Minimal build successful"
+        elif attempt_build "offline"; then
+          echo "✅ Offline build successful"
+        else
+          echo "❌ All build strategies failed"
+          echo "🔍 Checking for common issues..."
+          
+          # Check available space
+          df -h
+          
+          # Check memory
+          free -h
+          
+          # Check Gradle daemon status
+          ./gradlew --status || true
+          
+          # List build outputs for debugging
+          find . -name "*.log" -o -name "*.txt" | head -10
+          
+          exit 1
+        fi
         
     - name: Find APK
       run: |
