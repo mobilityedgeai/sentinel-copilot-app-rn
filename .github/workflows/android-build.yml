@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Simple)
 
 on:
   push:
@@ -33,9 +33,6 @@ jobs:
     - name: Install dependencies
       run: npm ci
       
-    - name: Setup Expo CLI
-      run: npm install -g @expo/cli
-      
     - name: Create Firebase config file
       run: |
         cat > firebase-service-account.json << EOF
@@ -53,116 +50,31 @@ jobs:
         }
         EOF
         
-    - name: Create app.json with build config
-      run: |
-        cat > app.json << EOF
-        {
-          "expo": {
-            "name": "Sentinel Copilot",
-            "slug": "sentinel-copilot-app",
-            "version": "1.0.0",
-            "orientation": "portrait",
-            "icon": "./assets/icon.png",
-            "userInterfaceStyle": "automatic",
-            "splash": {
-              "image": "./assets/splash.png",
-              "resizeMode": "contain",
-              "backgroundColor": "#001122"
-            },
-            "assetBundlePatterns": [
-              "**/*"
-            ],
-            "ios": {
-              "supportsTablet": true
-            },
-            "android": {
-              "package": "com.sentinelcopilot.app",
-              "versionCode": 1,
-              "compileSdkVersion": 34,
-              "targetSdkVersion": 34,
-              "buildToolsVersion": "34.0.0",
-              "permissions": [
-                "INTERNET",
-                "ACCESS_NETWORK_STATE",
-                "CAMERA",
-                "RECORD_AUDIO"
-              ],
-              "adaptiveIcon": {
-                "foregroundImage": "./assets/adaptive-icon.png",
-                "backgroundColor": "#001122"
-              }
-            },
-            "web": {
-              "favicon": "./assets/favicon.png"
-            },
-            "plugins": [
-              "expo-av"
-            ]
-          }
-        }
-        EOF
-        
     - name: Create basic assets
       run: |
         mkdir -p assets
-        # Create minimal PNG files using printf (no external dependencies)
-        printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x04\x00\x00\x00\x04\x00\x08\x02\x00\x00\x00\x26\x93\x09\x29\x00\x00\x00\x12IDATx\x9cc\xf8\x0f\x00\x01\x01\x01\x00\x18\xdd\x8d\xb4\x1c\x00\x00\x00\x00IEND\xaeB\x60\x82' > assets/icon.png
+        # Create a simple 1x1 transparent PNG
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/icon.png
         cp assets/icon.png assets/splash.png
         cp assets/icon.png assets/adaptive-icon.png
         cp assets/icon.png assets/favicon.png
-        echo "Basic assets created"
+        echo "Assets created successfully"
+        
+    - name: Install Expo CLI
+      run: npm install -g @expo/cli
       
-    - name: Install EAS CLI
-      run: npm install -g eas-cli
-      
-    - name: Configure EAS
+    - name: Prebuild for Android
       run: |
-        cat > eas.json << EOF
-        {
-          "cli": {
-            "version": ">= 5.9.0"
-          },
-          "build": {
-            "development": {
-              "developmentClient": true,
-              "distribution": "internal"
-            },
-            "preview": {
-              "distribution": "internal",
-              "android": {
-                "buildType": "apk"
-              }
-            },
-            "production": {
-              "android": {
-                "buildType": "apk"
-              }
-            }
-          },
-          "submit": {
-            "production": {}
-          }
-        }
-        EOF
+        npx expo install --fix
+        npx expo prebuild --platform android --clear
         
-    - name: Authenticate with Expo
+    - name: Build Android APK
       run: |
-        echo "${{ secrets.EXPO_TOKEN }}" | expo login --non-interactive
-        
-    - name: Build APK
-      run: |
-        # Try EAS build first, fallback to local build if needed
-        if [ -n "${{ secrets.EXPO_TOKEN }}" ]; then
-          eas build --platform android --profile preview --non-interactive --no-wait || echo "EAS build failed, trying local build"
-        fi
-        
-        # Local build as fallback
-        expo install --fix
-        expo prebuild --platform android
         cd android
-        ./gradlew assembleRelease || ./gradlew assembleDebug
+        chmod +x ./gradlew
+        ./gradlew assembleRelease --no-daemon --stacktrace
         
-    - name: Find and rename APK
+    - name: Find and prepare APK
       run: |
         # Find the built APK
         APK_PATH=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
@@ -174,9 +86,11 @@ jobs:
           cp "$APK_PATH" "build-output/sentinel-copilot-${TIMESTAMP}.apk"
           echo "APK built successfully: sentinel-copilot-${TIMESTAMP}.apk"
           ls -la build-output/
+          echo "APK_FILE=sentinel-copilot-${TIMESTAMP}.apk" >> $GITHUB_ENV
         else
           echo "No APK found"
           find android -name "*.apk" -type f
+          exit 1
         fi
         
     - name: Upload APK artifact
@@ -188,6 +102,7 @@ jobs:
         
     - name: Create Release
       if: github.ref == 'refs/heads/main'
+      id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -220,7 +135,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: build-output/sentinel-copilot-*.apk
+        asset_path: build-output/${{ env.APK_FILE }}
         asset_name: sentinel-copilot-v1.0.${{ github.run_number }}.apk
         asset_content_type: application/vnd.android.package-archive
 
