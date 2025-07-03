@@ -21,9 +21,9 @@
     "android": {
       "package": "com.sentinelcopilot.app",
       "versionCode": 1,
-      "compileSdkVersion": 34,
-      "targetSdkVersion": 34,
-      "buildToolsVersion": "34.0.0",
+      "compileSdkVersion": 33,
+      "targetSdkVersion": 33,
+      "buildToolsVersion": "33.0.0",
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",
@@ -46,9 +46,9 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 34,
-            "targetSdkVersion": 34,
-            "buildToolsVersion": "34.0.0"
+            "compileSdkVersion": 33,
+            "targetSdkVersion": 33,
+            "buildToolsVersion": "33.0.0"
           }
         }
       ]
