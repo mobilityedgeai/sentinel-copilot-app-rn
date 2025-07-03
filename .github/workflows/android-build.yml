@@ -102,17 +102,15 @@ jobs:
         }
         EOF
         
-    - name: Create placeholder assets
+    - name: Create basic assets
       run: |
         mkdir -p assets
-        # Create a simple 1024x1024 icon placeholder
-        convert -size 1024x1024 xc:"#0066cc" -fill white -gravity center -pointsize 200 -annotate +0+0 "SC" assets/icon.png
-        # Create splash screen
-        convert -size 1284x2778 xc:"#001122" -fill "#0066cc" -gravity center -pointsize 100 -annotate +0+0 "SENTINEL\nCOPILOT" assets/splash.png
-        # Create adaptive icon
+        # Create minimal PNG files using printf (no external dependencies)
+        printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x04\x00\x00\x00\x04\x00\x08\x02\x00\x00\x00\x26\x93\x09\x29\x00\x00\x00\x12IDATx\x9cc\xf8\x0f\x00\x01\x01\x01\x00\x18\xdd\x8d\xb4\x1c\x00\x00\x00\x00IEND\xaeB\x60\x82' > assets/icon.png
+        cp assets/icon.png assets/splash.png
         cp assets/icon.png assets/adaptive-icon.png
-        # Create favicon
-        convert assets/icon.png -resize 32x32 assets/favicon.png
+        cp assets/icon.png assets/favicon.png
+        echo "Basic assets created"
       
     - name: Install EAS CLI
       run: npm install -g eas-cli
