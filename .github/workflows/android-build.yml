@@ -1,28 +1,26 @@
-name: Build Android APK (Optimized)
+name: Build Android APK (Ultra Simple)
 
 on:
   push:
     branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Node.js
+    - name: Setup Node.js 18
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
+        node-version: '18.x'
         cache: 'npm'
         
-    - name: Setup Java JDK
+    - name: Setup Java 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
@@ -30,15 +28,11 @@ jobs:
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      with:
-        api-level: 33
-        build-tools: 33.0.0
-        
+      
     - name: Install dependencies
-      run: |
-        npm ci --prefer-offline --no-audit
+      run: npm install
         
-    - name: Create Firebase config file
+    - name: Create Firebase config
       run: |
         cat > firebase-service-account.json << EOF
         {
@@ -55,171 +49,117 @@ jobs:
         }
         EOF
         
-    - name: Create minimal assets
+    - name: Create basic assets
       run: |
         mkdir -p assets
-        # Create 1x1 transparent PNG using base64
         echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/icon.png
         cp assets/icon.png assets/splash.png
         cp assets/icon.png assets/adaptive-icon.png
         cp assets/icon.png assets/favicon.png
         
     - name: Install Expo CLI
-      run: npm install -g @expo/cli@latest
+      run: npm install -g @expo/cli
       
-    - name: Fix dependencies and prebuild
+    - name: Fix dependencies
+      run: npx expo install --fix
+      
+    - name: Clean and prebuild
       run: |
-        # Fix any dependency issues
-        npx expo install --fix
+        rm -rf android ios
+        npx expo prebuild --platform android --clear
         
-        # Clear any existing android directory
-        rm -rf android
+    - name: Verify Android project
+      run: |
+        if [ ! -d "android" ]; then
+          echo "❌ Android directory not created"
+          exit 1
+        fi
+        echo "✅ Android project created"
+        ls -la android/
         
-        # Prebuild with minimal configuration
-        npx expo prebuild --platform android --no-install
-        
-    - name: Configure Android build
+    - name: Configure Gradle
       run: |
         cd android
         
-        # Ensure gradlew is executable
+        # Make gradlew executable
         chmod +x ./gradlew
         
-        # Create gradle.properties for optimization
-        cat >> gradle.properties << EOF
-        org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m
+        # Create optimized gradle.properties
+        cat > gradle.properties << EOF
+        # Gradle optimization
+        org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError
         org.gradle.parallel=true
-        org.gradle.configureondemand=true
+        org.gradle.configureondemand=false
         org.gradle.daemon=false
+        org.gradle.caching=true
+        
+        # Android optimization
         android.useAndroidX=true
         android.enableJetifier=true
+        android.enableR8.fullMode=false
+        android.enableBuildCache=false
+        
+        # Disable unnecessary features
+        android.enableAapt2=true
+        android.enableD8=true
+        android.enableIncrementalDesugaring=false
         EOF
         
-    - name: Build APK (Debug first, then Release)
+        echo "✅ Gradle configured"
+        
+    - name: Clean Gradle cache
       run: |
         cd android
+        ./gradlew clean --stacktrace
         
-        # Try debug build first (more likely to succeed)
-        echo "🔨 Building debug APK..."
-        if ./gradlew assembleDebug --no-daemon --stacktrace --info; then
-          echo "✅ Debug build successful"
-          BUILD_TYPE="debug"
-        else
-          echo "❌ Debug build failed, trying release..."
-          if ./gradlew assembleRelease --no-daemon --stacktrace --info; then
-            echo "✅ Release build successful"
-            BUILD_TYPE="release"
-          else
-            echo "❌ Both builds failed"
-            exit 1
-          fi
-        fi
-        
-        # Export build type for next steps
-        echo "BUILD_TYPE=$BUILD_TYPE" >> $GITHUB_ENV
-        
-    - name: Find and prepare APK
+    - name: Build Debug APK
       run: |
-        # Find the built APK
-        if [ "$BUILD_TYPE" = "debug" ]; then
-          APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
-        else
-          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
-        fi
+        cd android
+        echo "🔨 Building debug APK..."
+        ./gradlew assembleDebug --stacktrace --info --no-daemon
         
+    - name: Find APK
+      run: |
+        APK_PATH=$(find android -name "*.apk" -type f | head -1)
         if [ -n "$APK_PATH" ]; then
-          # Create output directory
           mkdir -p build-output
-          
-          # Copy and rename APK with timestamp
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          OUTPUT_NAME="sentinel-copilot-${BUILD_TYPE}-${TIMESTAMP}.apk"
-          cp "$APK_PATH" "build-output/$OUTPUT_NAME"
-          
-          # Get APK info
-          APK_SIZE=$(du -h "build-output/$OUTPUT_NAME" | cut -f1)
-          
-          echo "✅ APK built successfully!"
-          echo "📱 File: $OUTPUT_NAME"
-          echo "📏 Size: $APK_SIZE"
-          echo "🔧 Type: $BUILD_TYPE"
-          
-          # Export for artifacts
-          echo "APK_FILE=$OUTPUT_NAME" >> $GITHUB_ENV
-          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
-          
-          # List all files for debugging
+          cp "$APK_PATH" "build-output/sentinel-copilot-debug-${TIMESTAMP}.apk"
+          echo "✅ APK found and copied"
           ls -la build-output/
+          echo "APK_FILE=sentinel-copilot-debug-${TIMESTAMP}.apk" >> $GITHUB_ENV
         else
           echo "❌ No APK found"
-          echo "🔍 Available files:"
-          find android -name "*.apk" -o -name "*.aab" | head -10
+          find android -name "*.apk" -o -name "*.aab"
           exit 1
         fi
         
-    - name: Upload APK artifact
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: sentinel-copilot-apk-${{ env.BUILD_TYPE }}
+        name: sentinel-copilot-debug-apk
         path: build-output/*.apk
         retention-days: 30
         
     - name: Create Release
-      if: github.ref == 'refs/heads/main' && env.APK_FILE != ''
-      id: create_release
+      if: github.ref == 'refs/heads/main'
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v1.0.${{ github.run_number }}
-        release_name: Sentinel Copilot v1.0.${{ github.run_number }} (${{ env.BUILD_TYPE }})
+        release_name: Sentinel Copilot v1.0.${{ github.run_number }}
         body: |
-          🚀 **Sentinel Copilot Mobile App**
+          🚀 **Sentinel Copilot Mobile App - Debug Build**
           
-          ✨ **Funcionalidades:**
-          - 📊 Dashboard com métricas em tempo real
-          - 🚗 Sistema de viagens inteligente  
-          - 🔍 Inspeções com IA
-          - 🤖 Chatbot ADA com vídeo interativo
-          - 🔥 Integração Firebase completa
+          📱 **APK Gerado**: ${{ env.APK_FILE }}
+          🔧 **Tipo**: Debug (para testes)
+          📅 **Data**: ${{ github.event.head_commit.timestamp }}
           
-          📱 **Informações do APK:**
-          - **Arquivo**: ${{ env.APK_FILE }}
-          - **Tamanho**: ${{ env.APK_SIZE }}
-          - **Tipo**: ${{ env.BUILD_TYPE }}
-          - **Versão**: 1.0.${{ github.run_number }}
-          
-          🔐 **Credenciais de Login:**
-          - CPF: `123.456.789-00` | Senha: `123456`
-          - Código: `MOT001` | Senha: `123456`
-          - Admin: `admin` | Senha: `123456`
-          
-          📥 **Instalação:**
-          1. Baixe o APK anexado
-          2. Habilite "Fontes desconhecidas" no Android
-          3. Instale o APK
+          🔐 **Login:**
+          - CPF: 123.456.789-00 | Senha: 123456
+          - Código: MOT001 | Senha: 123456
           
         draft: false
         prerelease: false
-        
-    - name: Upload APK to Release
-      if: github.ref == 'refs/heads/main' && env.APK_FILE != ''
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: build-output/${{ env.APK_FILE }}
-        asset_name: ${{ env.APK_FILE }}
-        asset_content_type: application/vnd.android.package-archive
-        
-    - name: Build Summary
-      if: always()
-      run: |
-        echo "## 📱 Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Type**: ${{ env.BUILD_TYPE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **APK File**: ${{ env.APK_FILE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **APK Size**: ${{ env.APK_SIZE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
 
