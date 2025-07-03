@@ -1,0 +1,152 @@
+name: Build Android APK (Ultra Simple)
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: 🔄 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js 18
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: ☕ Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: 🤖 Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 33
+        build-tools: 33.0.0
+        
+    - name: 📦 Install dependencies
+      run: |
+        echo "📦 Installing dependencies..."
+        npm ci
+        echo "✅ Dependencies installed"
+        
+    - name: 🔥 Create Firebase config
+      run: |
+        echo "🔥 Creating Firebase service account..."
+        cat > firebase-service-account.json << 'EOF'
+        {
+          "type": "service_account",
+          "project_id": "sentinel-ai-769c5",
+          "private_key_id": "${{ secrets.FIREBASE_PRIVATE_KEY_ID }}",
+          "private_key": "${{ secrets.FIREBASE_PRIVATE_KEY }}",
+          "client_email": "${{ secrets.FIREBASE_CLIENT_EMAIL }}",
+          "client_id": "${{ secrets.FIREBASE_CLIENT_ID }}",
+          "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+          "token_uri": "https://oauth2.googleapis.com/token",
+          "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+          "client_x509_cert_url": "${{ secrets.FIREBASE_CLIENT_CERT_URL }}"
+        }
+        EOF
+        echo "✅ Firebase config created"
+        
+    - name: 🎨 Create assets
+      run: |
+        echo "🎨 Creating basic assets..."
+        mkdir -p assets/images
+        
+        # Create minimal PNG files
+        printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00IEND\xaeB`\x82' > assets/images/icon.png
+        cp assets/images/icon.png assets/images/splash.png
+        cp assets/images/icon.png assets/images/adaptive-icon.png
+        cp assets/images/icon.png assets/images/favicon.png
+        
+        echo "✅ Assets created"
+        
+    - name: 🛠️ Install Expo CLI
+      run: |
+        echo "🛠️ Installing Expo CLI..."
+        npm install -g @expo/cli@latest
+        echo "✅ Expo CLI installed"
+        
+    - name: 🔨 Prebuild Android
+      run: |
+        echo "🔨 Running Expo prebuild..."
+        npx expo prebuild --platform android --no-install
+        echo "✅ Prebuild completed"
+        
+    - name: 🚀 Build APK
+      run: |
+        echo "🚀 Building APK..."
+        cd android
+        
+        # Simple gradle.properties
+        cat > gradle.properties << 'EOF'
+        org.gradle.jvmargs=-Xmx4096m
+        org.gradle.daemon=false
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
+        
+        # Build APK
+        ./gradlew assembleDebug --no-daemon --stacktrace
+        
+        echo "✅ Build completed"
+        
+    - name: 📱 Find APK
+      run: |
+        echo "📱 Searching for APK..."
+        find . -name "*.apk" -type f | head -5
+        
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "✅ APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+        else
+          echo "❌ No APK found"
+          exit 1
+        fi
+        
+    - name: 📋 Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: sentinel-copilot-debug-${{ github.run_number }}
+        path: ${{ env.APK_PATH }}
+        retention-days: 30
+        
+    - name: 🚀 Create Release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Sentinel Copilot v1.0.${{ github.run_number }}
+        body: |
+          🚀 **Sentinel Copilot Mobile App (Debug Build)**
+          
+          📱 **Build Type**: Debug APK
+          📅 **Build Date**: ${{ github.event.head_commit.timestamp }}
+          🔧 **Commit**: ${{ github.sha }}
+          
+          ### 🔐 Login Credentials
+          - **CPF**: `123.456.789-00` + **Senha**: `123456`
+          - **Código**: `MOT001` + **Senha**: `123456`
+          - **Admin**: `admin` + **Senha**: `123456`
+          
+          ### 📱 Installation
+          1. Download the APK file
+          2. Enable "Unknown sources" on Android
+          3. Install and test!
+        files: ${{ env.APK_PATH }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
