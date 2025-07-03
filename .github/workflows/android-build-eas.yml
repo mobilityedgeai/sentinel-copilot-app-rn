@@ -1,0 +1,284 @@
+name: Build Android APK with EAS
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: 🔄 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js 18
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: |
+        echo "📦 Installing npm dependencies..."
+        npm ci --prefer-offline --no-audit
+        echo "✅ Dependencies installed"
+        
+    - name: 🔥 Create Firebase config
+      run: |
+        echo "🔥 Creating Firebase configuration..."
+        cat > firebase-service-account.json << 'EOF'
+        {
+          "type": "service_account",
+          "project_id": "${{ secrets.FIREBASE_PROJECT_ID || 'sentinel-ai-769c5' }}",
+          "private_key_id": "${{ secrets.FIREBASE_PRIVATE_KEY_ID }}",
+          "private_key": "${{ secrets.FIREBASE_PRIVATE_KEY }}",
+          "client_email": "${{ secrets.FIREBASE_CLIENT_EMAIL }}",
+          "client_id": "${{ secrets.FIREBASE_CLIENT_ID }}",
+          "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+          "token_uri": "https://oauth2.googleapis.com/token",
+          "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+          "client_x509_cert_url": "${{ secrets.FIREBASE_CLIENT_CERT_URL }}"
+        }
+        EOF
+        echo "✅ Firebase config created"
+        
+    - name: 🛠️ Install Expo CLI and EAS CLI
+      run: |
+        echo "🛠️ Installing Expo and EAS CLI..."
+        npm install -g @expo/cli@latest eas-cli@latest
+        echo "✅ CLI tools installed"
+        
+    - name: 🔧 Configure EAS
+      run: |
+        echo "🔧 Configuring EAS build..."
+        
+        # Create eas.json if it doesn't exist
+        if [ ! -f "eas.json" ]; then
+          cat > eas.json << 'EOF'
+        {
+          "cli": {
+            "version": ">= 5.0.0"
+          },
+          "build": {
+            "development": {
+              "developmentClient": true,
+              "distribution": "internal"
+            },
+            "preview": {
+              "distribution": "internal",
+              "android": {
+                "buildType": "apk"
+              }
+            },
+            "production": {
+              "android": {
+                "buildType": "app-bundle"
+              }
+            }
+          },
+          "submit": {
+            "production": {}
+          }
+        }
+        EOF
+        fi
+        
+        # Update app.json for EAS compatibility
+        cat > app.json << 'EOF'
+        {
+          "expo": {
+            "name": "Sentinel Copilot",
+            "slug": "sentinel-copilot-app",
+            "version": "1.0.0",
+            "orientation": "portrait",
+            "icon": "./assets/images/icon.png",
+            "userInterfaceStyle": "automatic",
+            "splash": {
+              "image": "./assets/images/splash.png",
+              "resizeMode": "contain",
+              "backgroundColor": "#0066cc"
+            },
+            "assetBundlePatterns": [
+              "**/*"
+            ],
+            "ios": {
+              "supportsTablet": true
+            },
+            "android": {
+              "adaptiveIcon": {
+                "foregroundImage": "./assets/images/adaptive-icon.png",
+                "backgroundColor": "#0066cc"
+              },
+              "package": "com.mobilityedgeai.sentinelcopilot",
+              "versionCode": 1
+            },
+            "web": {
+              "favicon": "./assets/images/favicon.png"
+            },
+            "extra": {
+              "eas": {
+                "projectId": "sentinel-copilot-rn"
+              }
+            }
+          }
+        }
+        EOF
+        
+        echo "✅ EAS configuration completed"
+        
+    - name: 🎨 Create basic assets
+      run: |
+        echo "🎨 Creating basic app assets..."
+        mkdir -p assets/images
+        
+        # Create simple PNG assets using printf (more reliable than base64)
+        printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00IEND\xaeB`\x82' > assets/images/icon.png
+        cp assets/images/icon.png assets/images/splash.png
+        cp assets/images/icon.png assets/images/adaptive-icon.png
+        cp assets/images/icon.png assets/images/favicon.png
+        
+        echo "✅ Basic assets created"
+        
+    - name: 🚀 Build APK with EAS
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      run: |
+        echo "🚀 ===== BUILDING APK WITH EAS ====="
+        echo "📅 Build started at: $(date)"
+        
+        # Try EAS build first (most reliable)
+        if [ -n "$EXPO_TOKEN" ]; then
+          echo "🔑 Using Expo token for authenticated build"
+          eas build --platform android --profile preview --non-interactive --no-wait
+          
+          # Wait for build completion (with timeout)
+          echo "⏳ Waiting for EAS build to complete..."
+          timeout 30m bash -c '
+            while true; do
+              if eas build:list --platform android --limit 1 --json | jq -r ".[0].status" | grep -q "FINISHED"; then
+                echo "✅ EAS build completed successfully"
+                break
+              elif eas build:list --platform android --limit 1 --json | jq -r ".[0].status" | grep -q "ERRORED"; then
+                echo "❌ EAS build failed"
+                exit 1
+              else
+                echo "⏳ Build still in progress..."
+                sleep 60
+              fi
+            done
+          '
+          
+          # Download the built APK
+          BUILD_URL=$(eas build:list --platform android --limit 1 --json | jq -r ".[0].artifacts.buildUrl")
+          if [ "$BUILD_URL" != "null" ] && [ -n "$BUILD_URL" ]; then
+            echo "📥 Downloading APK from EAS..."
+            curl -L -o "sentinel-copilot-eas.apk" "$BUILD_URL"
+            echo "✅ APK downloaded from EAS"
+          else
+            echo "❌ No build URL available from EAS"
+            exit 1
+          fi
+          
+        else
+          echo "⚠️ No EXPO_TOKEN provided, falling back to local build"
+          
+          # Fallback to local prebuild + gradle
+          echo "🔨 Running local prebuild..."
+          npx expo prebuild --platform android --no-install
+          
+          cd android
+          
+          echo "🔧 Configuring local build..."
+          cat > gradle.properties << 'EOF'
+        org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=2048m
+        org.gradle.parallel=false
+        org.gradle.daemon=false
+        org.gradle.configureondemand=false
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
+          
+          echo "🚀 Building APK locally..."
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          
+          # Find the generated APK
+          APK_PATH=$(find . -name "*.apk" -type f | head -1)
+          if [ -n "$APK_PATH" ]; then
+            cp "$APK_PATH" "../sentinel-copilot-local.apk"
+            echo "✅ Local APK build completed"
+          else
+            echo "❌ Local APK build failed"
+            exit 1
+          fi
+        fi
+        
+    - name: 📱 Verify APK
+      run: |
+        echo "📱 ===== VERIFYING GENERATED APK ====="
+        
+        # Find any APK files
+        find . -name "*.apk" -type f | while read apk; do
+          echo "📱 Found APK: $apk"
+          ls -lh "$apk"
+          file "$apk"
+          
+          # Set environment variable for the first APK found
+          if [ -z "$APK_SET" ]; then
+            echo "APK_PATH=$apk" >> $GITHUB_ENV
+            echo "APK_SET=true" >> $GITHUB_ENV
+            echo "✅ APK path set: $apk"
+          fi
+        done
+        
+        # Verify we have an APK
+        if [ -z "$(find . -name "*.apk" -type f)" ]; then
+          echo "❌ No APK found after build"
+          exit 1
+        fi
+        
+    - name: 📋 Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sentinel-copilot-apk-${{ github.run_number }}
+        path: "*.apk"
+        retention-days: 30
+        
+    - name: 🚀 Create Release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Sentinel Copilot v1.0.${{ github.run_number }}
+        body: |
+          🚀 **Sentinel Copilot Mobile App**
+          
+          📱 **Build Type**: APK
+          📅 **Build Date**: ${{ github.event.head_commit.timestamp }}
+          🔧 **Commit**: ${{ github.sha }}
+          
+          ### 📦 Download
+          - Download the APK from the assets below
+          
+          ### 🔐 Login Credentials
+          - **CPF**: `123.456.789-00` + **Senha**: `123456`
+          - **Código**: `MOT001` + **Senha**: `123456`
+          - **Admin**: `admin` + **Senha**: `123456`
+          
+          ### 📱 Installation
+          1. Download the APK file
+          2. Enable "Unknown sources" on Android
+          3. Install and enjoy!
+          
+          ### 🔥 Firebase Integration
+          - **Database**: sentinel-ai-nam5
+          - **Enterprise ID**: sA9EmrE3ymtnBqJKcYn7
+        files: "*.apk"
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
