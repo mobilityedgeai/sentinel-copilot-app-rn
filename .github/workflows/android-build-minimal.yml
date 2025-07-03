@@ -1,0 +1,215 @@
+name: Build Android APK (Minimal)
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: 🔄 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js 18
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: ☕ Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: 🤖 Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 33
+        build-tools: 33.0.0
+        
+    - name: 📦 Install dependencies
+      run: |
+        echo "📦 Installing dependencies..."
+        npm ci --prefer-offline --no-audit
+        echo "✅ Dependencies installed successfully"
+        
+    - name: 🔥 Create Firebase config
+      run: |
+        echo "🔥 Creating Firebase service account..."
+        cat > firebase-service-account.json << 'EOF'
+        {
+          "type": "service_account",
+          "project_id": "sentinel-ai-769c5",
+          "private_key_id": "${{ secrets.FIREBASE_PRIVATE_KEY_ID || 'dummy-key-id' }}",
+          "private_key": "${{ secrets.FIREBASE_PRIVATE_KEY || '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKB\n-----END PRIVATE KEY-----' }}",
+          "client_email": "${{ secrets.FIREBASE_CLIENT_EMAIL || 'test@sentinel-ai-769c5.iam.gserviceaccount.com' }}",
+          "client_id": "${{ secrets.FIREBASE_CLIENT_ID || '123456789' }}",
+          "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+          "token_uri": "https://oauth2.googleapis.com/token",
+          "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+          "client_x509_cert_url": "${{ secrets.FIREBASE_CLIENT_CERT_URL || 'https://www.googleapis.com/robot/v1/metadata/x509/test%40sentinel-ai-769c5.iam.gserviceaccount.com' }}"
+        }
+        EOF
+        echo "✅ Firebase config created"
+        
+    - name: 🎨 Create minimal assets
+      run: |
+        echo "🎨 Creating minimal assets..."
+        mkdir -p assets/images
+        
+        # Create 1x1 pixel PNG files (minimal valid PNG)
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/images/icon.png
+        cp assets/images/icon.png assets/images/splash.png
+        cp assets/images/icon.png assets/images/adaptive-icon.png
+        cp assets/images/icon.png assets/images/favicon.png
+        
+        echo "✅ Minimal assets created"
+        
+    - name: 🛠️ Install Expo CLI
+      run: |
+        echo "🛠️ Installing Expo CLI..."
+        npm install -g @expo/cli@latest
+        echo "✅ Expo CLI installed"
+        
+    - name: 🔨 Prebuild Android project
+      run: |
+        echo "🔨 Running Expo prebuild..."
+        npx expo prebuild --platform android --no-install
+        echo "✅ Prebuild completed successfully"
+        
+    - name: 🔧 Configure Gradle for CI
+      run: |
+        echo "🔧 Configuring Gradle for CI environment..."
+        cd android
+        
+        # Create optimized gradle.properties for CI
+        cat > gradle.properties << 'EOF'
+        # Gradle JVM settings
+        org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC
+        org.gradle.daemon=false
+        org.gradle.parallel=false
+        org.gradle.configureondemand=false
+        org.gradle.caching=false
+        
+        # Android settings
+        android.useAndroidX=true
+        android.enableJetifier=true
+        android.compileSdkVersion=33
+        android.targetSdkVersion=33
+        android.buildToolsVersion=33.0.0
+        
+        # Disable problematic features
+        android.enableR8.fullMode=false
+        android.enableBuildCache=false
+        android.enableD8.desugaring=false
+        
+        # React Native
+        reactNativeArchitectures=armeabi-v7a,arm64-v8a
+        hermesEnabled=true
+        newArchEnabled=false
+        EOF
+        
+        echo "✅ Gradle configured for CI"
+        
+    - name: 🚀 Build Debug APK
+      run: |
+        echo "🚀 Building Debug APK..."
+        cd android
+        
+        echo "📋 Available Gradle tasks:"
+        ./gradlew tasks --all | grep -i assemble | head -5
+        
+        echo "🔨 Starting assembleDebug..."
+        ./gradlew assembleDebug \
+          --no-daemon \
+          --stacktrace \
+          --info \
+          --no-build-cache \
+          --no-parallel \
+          -Dorg.gradle.jvmargs="-Xmx6144m -XX:MaxMetaspaceSize=1024m"
+        
+        echo "✅ Build completed"
+        
+    - name: 📱 Locate and verify APK
+      run: |
+        echo "📱 Searching for generated APK..."
+        
+        # Search in common locations
+        echo "🔍 Searching in android/app/build/outputs/apk/..."
+        find android -name "*.apk" -type f 2>/dev/null | while read apk; do
+          echo "📱 Found APK: $apk"
+          ls -lh "$apk"
+          file "$apk"
+        done
+        
+        # Set APK path for upload
+        APK_PATH=$(find android -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "✅ APK found and ready: $APK_PATH"
+          
+          # Copy to root for easier access
+          cp "$APK_PATH" "sentinel-copilot-debug.apk"
+          echo "📱 APK copied to: sentinel-copilot-debug.apk"
+        else
+          echo "❌ No APK found after build"
+          echo "📋 Directory structure:"
+          find android -type d -name "*apk*" 2>/dev/null || echo "No APK directories found"
+          find android -type d -name "*output*" 2>/dev/null || echo "No output directories found"
+          exit 1
+        fi
+        
+    - name: 📋 Upload APK artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sentinel-copilot-debug-apk-${{ github.run_number }}
+        path: sentinel-copilot-debug.apk
+        retention-days: 30
+        
+    - name: 🚀 Create GitHub Release
+      if: success() && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Sentinel Copilot v1.0.${{ github.run_number }}
+        body: |
+          🚀 **Sentinel Copilot Mobile App - Debug Build**
+          
+          📱 **Build Type**: Debug APK
+          📅 **Build Date**: ${{ github.event.head_commit.timestamp }}
+          🔧 **Commit**: ${{ github.sha }}
+          ⚡ **Workflow**: Minimal Build (Optimized for CI/CD)
+          
+          ### 🔐 Login Credentials
+          - **CPF**: `123.456.789-00` + **Senha**: `123456`
+          - **Código**: `MOT001` + **Senha**: `123456`
+          - **Admin**: `admin` + **Senha**: `123456`
+          
+          ### 🔥 Firebase Integration
+          - **Database**: sentinel-ai-nam5
+          - **Enterprise ID**: sA9EmrE3ymtnBqJKcYn7
+          
+          ### 📱 Installation Instructions
+          1. Download the APK file below
+          2. On Android: Settings → Security → Enable "Unknown sources"
+          3. Install the APK and launch the app
+          4. Use the credentials above to login
+          
+          ### 🎯 Features
+          - Real-time vehicle monitoring
+          - Trip management and history
+          - Intelligent inspection forms
+          - ADA chatbot with video
+          - Dark/Light theme support
+        files: sentinel-copilot-debug.apk
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
