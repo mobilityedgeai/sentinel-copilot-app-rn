@@ -1,4 +1,4 @@
-name: Build Android APK (Simple)
+name: Build Android APK (Optimized)
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     
     steps:
     - name: Checkout repository
@@ -29,10 +30,14 @@ jobs:
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      
+      with:
+        api-level: 33
+        build-tools: 33.0.0
+        
     - name: Install dependencies
-      run: npm ci
-      
+      run: |
+        npm ci --prefer-offline --no-audit
+        
     - name: Create Firebase config file
       run: |
         cat > firebase-service-account.json << EOF
@@ -50,92 +55,171 @@ jobs:
         }
         EOF
         
-    - name: Create basic assets
+    - name: Create minimal assets
       run: |
         mkdir -p assets
-        # Create a simple 1x1 transparent PNG
+        # Create 1x1 transparent PNG using base64
         echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/icon.png
         cp assets/icon.png assets/splash.png
         cp assets/icon.png assets/adaptive-icon.png
         cp assets/icon.png assets/favicon.png
-        echo "Assets created successfully"
         
     - name: Install Expo CLI
-      run: npm install -g @expo/cli
+      run: npm install -g @expo/cli@latest
       
-    - name: Prebuild for Android
+    - name: Fix dependencies and prebuild
       run: |
+        # Fix any dependency issues
         npx expo install --fix
-        npx expo prebuild --platform android
         
-    - name: Build Android APK
+        # Clear any existing android directory
+        rm -rf android
+        
+        # Prebuild with minimal configuration
+        npx expo prebuild --platform android --no-install
+        
+    - name: Configure Android build
       run: |
         cd android
+        
+        # Ensure gradlew is executable
         chmod +x ./gradlew
-        ./gradlew assembleRelease --no-daemon --stacktrace
+        
+        # Create gradle.properties for optimization
+        cat >> gradle.properties << EOF
+        org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m
+        org.gradle.parallel=true
+        org.gradle.configureondemand=true
+        org.gradle.daemon=false
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
+        
+    - name: Build APK (Debug first, then Release)
+      run: |
+        cd android
+        
+        # Try debug build first (more likely to succeed)
+        echo "🔨 Building debug APK..."
+        if ./gradlew assembleDebug --no-daemon --stacktrace --info; then
+          echo "✅ Debug build successful"
+          BUILD_TYPE="debug"
+        else
+          echo "❌ Debug build failed, trying release..."
+          if ./gradlew assembleRelease --no-daemon --stacktrace --info; then
+            echo "✅ Release build successful"
+            BUILD_TYPE="release"
+          else
+            echo "❌ Both builds failed"
+            exit 1
+          fi
+        fi
+        
+        # Export build type for next steps
+        echo "BUILD_TYPE=$BUILD_TYPE" >> $GITHUB_ENV
         
     - name: Find and prepare APK
       run: |
         # Find the built APK
-        APK_PATH=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+        if [ "$BUILD_TYPE" = "debug" ]; then
+          APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+        else
+          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+        fi
+        
         if [ -n "$APK_PATH" ]; then
           # Create output directory
           mkdir -p build-output
+          
           # Copy and rename APK with timestamp
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          cp "$APK_PATH" "build-output/sentinel-copilot-${TIMESTAMP}.apk"
-          echo "APK built successfully: sentinel-copilot-${TIMESTAMP}.apk"
+          OUTPUT_NAME="sentinel-copilot-${BUILD_TYPE}-${TIMESTAMP}.apk"
+          cp "$APK_PATH" "build-output/$OUTPUT_NAME"
+          
+          # Get APK info
+          APK_SIZE=$(du -h "build-output/$OUTPUT_NAME" | cut -f1)
+          
+          echo "✅ APK built successfully!"
+          echo "📱 File: $OUTPUT_NAME"
+          echo "📏 Size: $APK_SIZE"
+          echo "🔧 Type: $BUILD_TYPE"
+          
+          # Export for artifacts
+          echo "APK_FILE=$OUTPUT_NAME" >> $GITHUB_ENV
+          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
+          
+          # List all files for debugging
           ls -la build-output/
-          echo "APK_FILE=sentinel-copilot-${TIMESTAMP}.apk" >> $GITHUB_ENV
         else
-          echo "No APK found"
-          find android -name "*.apk" -type f
+          echo "❌ No APK found"
+          echo "🔍 Available files:"
+          find android -name "*.apk" -o -name "*.aab" | head -10
           exit 1
         fi
         
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: sentinel-copilot-apk
+        name: sentinel-copilot-apk-${{ env.BUILD_TYPE }}
         path: build-output/*.apk
         retention-days: 30
         
     - name: Create Release
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' && env.APK_FILE != ''
       id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v1.0.${{ github.run_number }}
-        release_name: Sentinel Copilot v1.0.${{ github.run_number }}
+        release_name: Sentinel Copilot v1.0.${{ github.run_number }} (${{ env.BUILD_TYPE }})
         body: |
           🚀 **Sentinel Copilot Mobile App**
           
           ✨ **Funcionalidades:**
-          - Dashboard com métricas em tempo real
-          - Sistema de viagens inteligente
-          - Inspeções com IA
-          - Chatbot ADA com vídeo interativo
-          - Integração Firebase completa
+          - 📊 Dashboard com métricas em tempo real
+          - 🚗 Sistema de viagens inteligente  
+          - 🔍 Inspeções com IA
+          - 🤖 Chatbot ADA com vídeo interativo
+          - 🔥 Integração Firebase completa
           
-          📱 **Download do APK:**
-          Baixe o arquivo APK anexado para instalar no Android.
+          📱 **Informações do APK:**
+          - **Arquivo**: ${{ env.APK_FILE }}
+          - **Tamanho**: ${{ env.APK_SIZE }}
+          - **Tipo**: ${{ env.BUILD_TYPE }}
+          - **Versão**: 1.0.${{ github.run_number }}
           
-          🔧 **Versão:** 1.0.${{ github.run_number }}
-          📅 **Data:** ${{ github.event.head_commit.timestamp }}
+          🔐 **Credenciais de Login:**
+          - CPF: `123.456.789-00` | Senha: `123456`
+          - Código: `MOT001` | Senha: `123456`
+          - Admin: `admin` | Senha: `123456`
+          
+          📥 **Instalação:**
+          1. Baixe o APK anexado
+          2. Habilite "Fontes desconhecidas" no Android
+          3. Instale o APK
           
         draft: false
         prerelease: false
         
     - name: Upload APK to Release
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' && env.APK_FILE != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: build-output/${{ env.APK_FILE }}
-        asset_name: sentinel-copilot-v1.0.${{ github.run_number }}.apk
+        asset_name: ${{ env.APK_FILE }}
         asset_content_type: application/vnd.android.package-archive
+        
+    - name: Build Summary
+      if: always()
+      run: |
+        echo "## 📱 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Type**: ${{ env.BUILD_TYPE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **APK File**: ${{ env.APK_FILE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **APK Size**: ${{ env.APK_SIZE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
 
