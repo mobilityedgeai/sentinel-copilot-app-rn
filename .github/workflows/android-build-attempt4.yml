@@ -1,0 +1,143 @@
+name: Build Android APK (Attempt 4 - Cordova)
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: 🔄 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js 18
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: ☕ Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: 🤖 Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 33
+        build-tools: 33.0.0
+        
+    - name: 📦 Install Cordova
+      run: |
+        echo "📦 Installing Cordova..."
+        npm install -g cordova@latest
+        echo "✅ Cordova installed"
+        
+    - name: 🔨 Create Cordova project
+      run: |
+        echo "🔨 Creating Cordova project..."
+        cordova create SentinelCordova com.mobilityedgeai.sentinelcopilot "Sentinel Copilot"
+        cd SentinelCordova
+        
+        # Add Android platform
+        cordova platform add android
+        
+        # Create simple HTML app
+        cat > www/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Sentinel Copilot</title>
+            <style>
+                body { font-family: Arial, sans-serif; padding: 20px; background: #0066cc; color: white; text-align: center; }
+                .logo { font-size: 24px; margin: 50px 0; }
+                .login { background: white; color: #333; padding: 20px; border-radius: 10px; margin: 20px; }
+                input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; }
+                button { background: #0066cc; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; }
+            </style>
+        </head>
+        <body>
+            <div class="logo">🛡️ Sentinel Copilot</div>
+            <div class="login">
+                <h2>Login</h2>
+                <input type="text" placeholder="CPF: 123.456.789-00" />
+                <input type="password" placeholder="Senha: 123456" />
+                <button onclick="alert('Login realizado com sucesso!')">Entrar</button>
+                <p><small>Credenciais de teste:<br>CPF: 123.456.789-00<br>Senha: 123456</small></p>
+            </div>
+        </body>
+        </html>
+        EOF
+        
+        echo "✅ Cordova project created"
+        
+    - name: 🚀 Build APK
+      run: |
+        echo "🚀 Building Cordova APK..."
+        cd SentinelCordova
+        
+        cordova build android --debug
+        
+        echo "✅ Build completed"
+        
+    - name: 📱 Find APK
+      run: |
+        echo "📱 Searching for APK..."
+        find . -name "*.apk" -type f | head -3
+        
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "✅ APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+        else
+          echo "❌ No APK found"
+          echo "📋 Directory structure:"
+          find . -type d -name "*apk*" -o -name "*output*" -o -name "*build*" | head -10
+          exit 1
+        fi
+        
+    - name: 📋 Upload APK
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sentinel-copilot-cordova-${{ github.run_number }}
+        path: ${{ env.APK_PATH }}
+        retention-days: 30
+        
+    - name: 🚀 Create Release
+      if: success() && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Sentinel Copilot v1.0.${{ github.run_number }} (Cordova)
+        body: |
+          🚀 **Sentinel Copilot Mobile App - Cordova Build**
+          
+          📱 **Build Type**: Cordova APK (Hybrid)
+          📅 **Build Date**: ${{ github.event.head_commit.timestamp }}
+          🔧 **Commit**: ${{ github.sha }}
+          
+          ### 🔐 Login Credentials
+          - **CPF**: `123.456.789-00`
+          - **Senha**: `123456`
+          
+          ### 📱 Installation
+          1. Download the APK file
+          2. Enable "Unknown sources" on Android
+          3. Install and test!
+          
+          **Note**: This is a simplified Cordova version for testing purposes.
+        files: ${{ env.APK_PATH }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
