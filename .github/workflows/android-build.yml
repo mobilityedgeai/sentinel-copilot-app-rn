@@ -1,0 +1,228 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Setup Java JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli
+      
+    - name: Create Firebase config file
+      run: |
+        cat > firebase-service-account.json << EOF
+        {
+          "type": "service_account",
+          "project_id": "sentinel-ai-769c5",
+          "private_key_id": "${{ secrets.FIREBASE_PRIVATE_KEY_ID }}",
+          "private_key": "${{ secrets.FIREBASE_PRIVATE_KEY }}",
+          "client_email": "${{ secrets.FIREBASE_CLIENT_EMAIL }}",
+          "client_id": "${{ secrets.FIREBASE_CLIENT_ID }}",
+          "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+          "token_uri": "https://oauth2.googleapis.com/token",
+          "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+          "client_x509_cert_url": "${{ secrets.FIREBASE_CLIENT_CERT_URL }}"
+        }
+        EOF
+        
+    - name: Create app.json with build config
+      run: |
+        cat > app.json << EOF
+        {
+          "expo": {
+            "name": "Sentinel Copilot",
+            "slug": "sentinel-copilot-app",
+            "version": "1.0.0",
+            "orientation": "portrait",
+            "icon": "./assets/icon.png",
+            "userInterfaceStyle": "automatic",
+            "splash": {
+              "image": "./assets/splash.png",
+              "resizeMode": "contain",
+              "backgroundColor": "#001122"
+            },
+            "assetBundlePatterns": [
+              "**/*"
+            ],
+            "ios": {
+              "supportsTablet": true
+            },
+            "android": {
+              "package": "com.sentinelcopilot.app",
+              "versionCode": 1,
+              "compileSdkVersion": 34,
+              "targetSdkVersion": 34,
+              "buildToolsVersion": "34.0.0",
+              "permissions": [
+                "INTERNET",
+                "ACCESS_NETWORK_STATE",
+                "CAMERA",
+                "RECORD_AUDIO"
+              ],
+              "adaptiveIcon": {
+                "foregroundImage": "./assets/adaptive-icon.png",
+                "backgroundColor": "#001122"
+              }
+            },
+            "web": {
+              "favicon": "./assets/favicon.png"
+            },
+            "plugins": [
+              "expo-av"
+            ]
+          }
+        }
+        EOF
+        
+    - name: Create placeholder assets
+      run: |
+        mkdir -p assets
+        # Create a simple 1024x1024 icon placeholder
+        convert -size 1024x1024 xc:"#0066cc" -fill white -gravity center -pointsize 200 -annotate +0+0 "SC" assets/icon.png
+        # Create splash screen
+        convert -size 1284x2778 xc:"#001122" -fill "#0066cc" -gravity center -pointsize 100 -annotate +0+0 "SENTINEL\nCOPILOT" assets/splash.png
+        # Create adaptive icon
+        cp assets/icon.png assets/adaptive-icon.png
+        # Create favicon
+        convert assets/icon.png -resize 32x32 assets/favicon.png
+      
+    - name: Install EAS CLI
+      run: npm install -g eas-cli
+      
+    - name: Configure EAS
+      run: |
+        cat > eas.json << EOF
+        {
+          "cli": {
+            "version": ">= 5.9.0"
+          },
+          "build": {
+            "development": {
+              "developmentClient": true,
+              "distribution": "internal"
+            },
+            "preview": {
+              "distribution": "internal",
+              "android": {
+                "buildType": "apk"
+              }
+            },
+            "production": {
+              "android": {
+                "buildType": "apk"
+              }
+            }
+          },
+          "submit": {
+            "production": {}
+          }
+        }
+        EOF
+        
+    - name: Authenticate with Expo
+      run: |
+        echo "${{ secrets.EXPO_TOKEN }}" | expo login --non-interactive
+        
+    - name: Build APK
+      run: |
+        # Try EAS build first, fallback to local build if needed
+        if [ -n "${{ secrets.EXPO_TOKEN }}" ]; then
+          eas build --platform android --profile preview --non-interactive --no-wait || echo "EAS build failed, trying local build"
+        fi
+        
+        # Local build as fallback
+        expo install --fix
+        expo prebuild --platform android
+        cd android
+        ./gradlew assembleRelease || ./gradlew assembleDebug
+        
+    - name: Find and rename APK
+      run: |
+        # Find the built APK
+        APK_PATH=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+        if [ -n "$APK_PATH" ]; then
+          # Create output directory
+          mkdir -p build-output
+          # Copy and rename APK with timestamp
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          cp "$APK_PATH" "build-output/sentinel-copilot-${TIMESTAMP}.apk"
+          echo "APK built successfully: sentinel-copilot-${TIMESTAMP}.apk"
+          ls -la build-output/
+        else
+          echo "No APK found"
+          find android -name "*.apk" -type f
+        fi
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sentinel-copilot-apk
+        path: build-output/*.apk
+        retention-days: 30
+        
+    - name: Create Release
+      if: github.ref == 'refs/heads/main'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        release_name: Sentinel Copilot v1.0.${{ github.run_number }}
+        body: |
+          🚀 **Sentinel Copilot Mobile App**
+          
+          ✨ **Funcionalidades:**
+          - Dashboard com métricas em tempo real
+          - Sistema de viagens inteligente
+          - Inspeções com IA
+          - Chatbot ADA com vídeo interativo
+          - Integração Firebase completa
+          
+          📱 **Download do APK:**
+          Baixe o arquivo APK anexado para instalar no Android.
+          
+          🔧 **Versão:** 1.0.${{ github.run_number }}
+          📅 **Data:** ${{ github.event.head_commit.timestamp }}
+          
+        draft: false
+        prerelease: false
+        
+    - name: Upload APK to Release
+      if: github.ref == 'refs/heads/main'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: build-output/sentinel-copilot-*.apk
+        asset_name: sentinel-copilot-v1.0.${{ github.run_number }}.apk
+        asset_content_type: application/vnd.android.package-archive
+
