@@ -290,17 +290,90 @@ jobs:
         
     - name: Find APK
       run: |
-        APK_PATH=$(find android -name "*.apk" -type f | head -1)
-        if [ -n "$APK_PATH" ]; then
+        echo "🔍 ===== SEARCHING FOR GENERATED APK ====="
+        echo "📱 Searching in all possible locations..."
+        
+        # Search for APK files in common locations
+        echo "🔍 Searching for *.apk files:"
+        find . -name "*.apk" -type f 2>/dev/null | head -20
+        
+        echo "🔍 Searching for *.aab files:"
+        find . -name "*.aab" -type f 2>/dev/null | head -10
+        
+        echo "🔍 Checking specific build output directories:"
+        ls -la app/build/outputs/apk/ 2>/dev/null || echo "app/build/outputs/apk/ not found"
+        ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "app/build/outputs/apk/debug/ not found"
+        ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "app/build/outputs/apk/release/ not found"
+        
+        echo "🔍 Checking alternative paths:"
+        ls -la build/outputs/apk/ 2>/dev/null || echo "build/outputs/apk/ not found"
+        ls -la build/outputs/apk/debug/ 2>/dev/null || echo "build/outputs/apk/debug/ not found"
+        
+        echo "🔍 Checking all build directories:"
+        find . -type d -name "outputs" 2>/dev/null | head -10
+        find . -type d -name "apk" 2>/dev/null | head -10
+        
+        # Try to find APK in multiple possible locations
+        APK_PATH=""
+        
+        # Check common APK locations
+        for path in \
+          "app/build/outputs/apk/debug/*.apk" \
+          "app/build/outputs/apk/release/*.apk" \
+          "build/outputs/apk/debug/*.apk" \
+          "build/outputs/apk/release/*.apk" \
+          "*/build/outputs/apk/debug/*.apk" \
+          "*/build/outputs/apk/release/*.apk"
+        do
+          echo "🔍 Checking pattern: $path"
+          for file in $path; do
+            if [ -f "$file" ]; then
+              APK_PATH="$file"
+              echo "✅ Found APK: $APK_PATH"
+              break 2
+            fi
+          done
+        done
+        
+        # If still not found, search everywhere
+        if [ -z "$APK_PATH" ]; then
+          echo "🔍 Comprehensive search for any APK file..."
+          APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        fi
+        
+        if [ -n "$APK_PATH" ] && [ -f "$APK_PATH" ]; then
+          echo "🎉 APK FOUND: $APK_PATH"
+          
+          # Get APK info
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          APK_NAME=$(basename "$APK_PATH")
+          
+          echo "📱 APK Details:"
+          echo "  File: $APK_NAME"
+          echo "  Path: $APK_PATH"
+          echo "  Size: $APK_SIZE"
+          
+          # Create output directory and copy APK
           mkdir -p build-output
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          cp "$APK_PATH" "build-output/sentinel-copilot-debug-${TIMESTAMP}.apk"
-          echo "✅ APK found and copied"
+          OUTPUT_NAME="sentinel-copilot-debug-${TIMESTAMP}.apk"
+          cp "$APK_PATH" "build-output/$OUTPUT_NAME"
+          
+          echo "✅ APK copied to: build-output/$OUTPUT_NAME"
           ls -la build-output/
-          echo "APK_FILE=sentinel-copilot-debug-${TIMESTAMP}.apk" >> $GITHUB_ENV
+          
+          # Export for next steps
+          echo "APK_FILE=$OUTPUT_NAME" >> $GITHUB_ENV
+          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
+          echo "APK_PATH=build-output/$OUTPUT_NAME" >> $GITHUB_ENV
+          
         else
-          echo "❌ No APK found"
-          find android -name "*.apk" -o -name "*.aab"
+          echo "❌ NO APK FOUND ANYWHERE"
+          echo "🔍 Complete directory structure:"
+          find . -type f -name "*.apk" -o -name "*.aab" -o -name "*.jar" | head -20
+          echo ""
+          echo "🔍 Build directories content:"
+          find . -type d -name "build" -exec ls -la {} \; 2>/dev/null | head -50
           exit 1
         fi
         
