@@ -115,55 +115,175 @@ jobs:
         
         echo "✅ Gradle configured for CI/CD"
         
-    - name: Build Debug APK with retries
+    - name: Build Debug APK with detailed logging
       run: |
         cd android
         
-        # Function to attempt build with different strategies
-        attempt_build() {
+        echo "🔍 ===== DETAILED BUILD DIAGNOSTICS ====="
+        echo "📅 Build started at: $(date)"
+        echo "🖥️  System info:"
+        uname -a
+        echo "💾 Memory info:"
+        free -h
+        echo "💿 Disk space:"
+        df -h
+        echo "☕ Java version:"
+        java -version
+        echo "🤖 Android SDK info:"
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+        ls -la $ANDROID_HOME/platforms/ || echo "No platforms found"
+        ls -la $ANDROID_HOME/build-tools/ || echo "No build-tools found"
+        echo ""
+        
+        echo "🔧 ===== GRADLE DIAGNOSTICS ====="
+        echo "📋 Gradle wrapper version:"
+        ./gradlew --version || echo "Gradle version check failed"
+        echo "📋 Gradle properties:"
+        cat gradle.properties || echo "No gradle.properties found"
+        echo "📋 Project structure:"
+        find . -maxdepth 2 -type d | sort
+        echo "📋 Build files:"
+        find . -name "build.gradle*" -o -name "settings.gradle*" | head -10
+        echo ""
+        
+        echo "🔍 ===== PRE-BUILD CHECKS ====="
+        echo "📱 Android manifest:"
+        find . -name "AndroidManifest.xml" | head -5
+        echo "📦 Dependencies check:"
+        ./gradlew dependencies --configuration debugCompileClasspath | head -20 || echo "Dependencies check failed"
+        echo "🧹 Clean check:"
+        ./gradlew clean --dry-run || echo "Clean dry-run failed"
+        echo ""
+        
+        # Function to attempt build with extensive logging
+        attempt_build_with_logging() {
           local strategy=$1
-          echo "🔨 Attempting build with strategy: $strategy"
+          local attempt=$2
+          echo "🚀 ===== BUILD ATTEMPT $attempt: $strategy ====="
+          echo "⏰ Started at: $(date)"
+          
+          # Create log file for this attempt
+          local log_file="build_${strategy}_${attempt}.log"
           
           case $strategy in
             "basic")
-              ./gradlew assembleDebug --no-daemon --stacktrace --info
+              echo "🔨 Trying basic build with full logging..."
+              timeout 600 ./gradlew assembleDebug \
+                --no-daemon \
+                --stacktrace \
+                --info \
+                --debug \
+                --scan \
+                2>&1 | tee "$log_file"
               ;;
             "single-thread")
-              ./gradlew assembleDebug --no-daemon --stacktrace --info --max-workers=1
+              echo "🔨 Trying single-thread build..."
+              timeout 600 ./gradlew assembleDebug \
+                --no-daemon \
+                --stacktrace \
+                --info \
+                --max-workers=1 \
+                --no-parallel \
+                2>&1 | tee "$log_file"
               ;;
             "minimal")
-              ./gradlew assembleDebug --no-daemon --stacktrace --quiet --no-parallel
+              echo "🔨 Trying minimal build..."
+              timeout 600 ./gradlew assembleDebug \
+                --no-daemon \
+                --stacktrace \
+                --quiet \
+                --no-parallel \
+                --offline \
+                2>&1 | tee "$log_file"
               ;;
-            "offline")
-              ./gradlew assembleDebug --no-daemon --stacktrace --offline --no-parallel
+            "verbose")
+              echo "🔨 Trying verbose build with maximum logging..."
+              timeout 600 ./gradlew assembleDebug \
+                --no-daemon \
+                --stacktrace \
+                --info \
+                --debug \
+                --warning-mode all \
+                2>&1 | tee "$log_file"
               ;;
           esac
+          
+          local exit_code=$?
+          echo "⏰ Finished at: $(date)"
+          echo "📊 Exit code: $exit_code"
+          
+          if [ $exit_code -eq 0 ]; then
+            echo "✅ Build successful with strategy: $strategy"
+            return 0
+          elif [ $exit_code -eq 124 ]; then
+            echo "⏰ Build timed out (10 minutes) with strategy: $strategy"
+          else
+            echo "❌ Build failed with exit code $exit_code using strategy: $strategy"
+          fi
+          
+          echo "📋 Last 50 lines of build log:"
+          tail -50 "$log_file" || echo "Could not read log file"
+          echo ""
+          
+          # Check for specific error patterns
+          echo "🔍 Analyzing errors in log:"
+          if grep -i "out of memory\|OutOfMemoryError" "$log_file"; then
+            echo "💾 MEMORY ERROR detected"
+          fi
+          if grep -i "permission denied\|access denied" "$log_file"; then
+            echo "🔒 PERMISSION ERROR detected"
+          fi
+          if grep -i "network\|connection\|timeout" "$log_file"; then
+            echo "🌐 NETWORK ERROR detected"
+          fi
+          if grep -i "space\|disk full" "$log_file"; then
+            echo "💿 DISK SPACE ERROR detected"
+          fi
+          if grep -i "compilation failed\|compile error" "$log_file"; then
+            echo "🔨 COMPILATION ERROR detected"
+          fi
+          if grep -i "dependency\|resolution\|artifact" "$log_file"; then
+            echo "📦 DEPENDENCY ERROR detected"
+          fi
+          echo ""
+          
+          return $exit_code
         }
         
-        # Try different build strategies
-        if attempt_build "basic"; then
-          echo "✅ Basic build successful"
-        elif attempt_build "single-thread"; then
-          echo "✅ Single-thread build successful"  
-        elif attempt_build "minimal"; then
-          echo "✅ Minimal build successful"
-        elif attempt_build "offline"; then
-          echo "✅ Offline build successful"
+        echo "🎯 ===== STARTING BUILD ATTEMPTS ====="
+        
+        # Try different build strategies with detailed logging
+        if attempt_build_with_logging "basic" "1"; then
+          echo "🎉 SUCCESS: Basic build completed!"
+        elif attempt_build_with_logging "single-thread" "2"; then
+          echo "🎉 SUCCESS: Single-thread build completed!"
+        elif attempt_build_with_logging "minimal" "3"; then
+          echo "🎉 SUCCESS: Minimal build completed!"
+        elif attempt_build_with_logging "verbose" "4"; then
+          echo "🎉 SUCCESS: Verbose build completed!"
         else
-          echo "❌ All build strategies failed"
-          echo "🔍 Checking for common issues..."
-          
-          # Check available space
-          df -h
-          
-          # Check memory
+          echo "💥 ===== ALL BUILD STRATEGIES FAILED ====="
+          echo "📊 Final system state:"
           free -h
+          df -h
+          echo ""
           
-          # Check Gradle daemon status
-          ./gradlew --status || true
+          echo "📋 All log files created:"
+          ls -la *.log || echo "No log files found"
+          echo ""
           
-          # List build outputs for debugging
-          find . -name "*.log" -o -name "*.txt" | head -10
+          echo "🔍 Summary of all errors:"
+          for log in *.log; do
+            if [ -f "$log" ]; then
+              echo "--- Errors from $log ---"
+              grep -i "error\|exception\|failed" "$log" | tail -10
+            fi
+          done
+          
+          echo ""
+          echo "📱 Checking if any APK was partially built:"
+          find . -name "*.apk" -o -name "*.aab" | head -10
           
           exit 1
         fi
