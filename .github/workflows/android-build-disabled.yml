@@ -1,0 +1,23 @@
+# DISABLED - This workflow has been replaced by android-build-eas.yml
+# The old workflow had issues with Gradle builds in CI/CD environment
+# EAS Build is more reliable and handles dependencies better
+
+name: Build Android APK (DISABLED)
+
+# Disabled by renaming to .yml.disabled
+on:
+  workflow_dispatch: # Only manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+    - name: ⚠️ Workflow Disabled
+      run: |
+        echo "⚠️ This workflow has been disabled"
+        echo "🔄 Please use android-build-eas.yml instead"
+        echo "📱 EAS Build is more reliable for generating APKs"
+        exit 1
+

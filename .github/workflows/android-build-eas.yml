@@ -1,4 +1,4 @@
-name: Build Android APK with EAS
+name: Build Android APK (EAS Build)
 
 on:
   push:
@@ -150,70 +150,45 @@ jobs:
         echo "🚀 ===== BUILDING APK WITH EAS ====="
         echo "📅 Build started at: $(date)"
         
-        # Try EAS build first (most reliable)
-        if [ -n "$EXPO_TOKEN" ]; then
-          echo "🔑 Using Expo token for authenticated build"
-          eas build --platform android --profile preview --non-interactive --no-wait
-          
-          # Wait for build completion (with timeout)
-          echo "⏳ Waiting for EAS build to complete..."
-          timeout 30m bash -c '
-            while true; do
-              if eas build:list --platform android --limit 1 --json | jq -r ".[0].status" | grep -q "FINISHED"; then
-                echo "✅ EAS build completed successfully"
-                break
-              elif eas build:list --platform android --limit 1 --json | jq -r ".[0].status" | grep -q "ERRORED"; then
-                echo "❌ EAS build failed"
-                exit 1
-              else
-                echo "⏳ Build still in progress..."
-                sleep 60
-              fi
-            done
-          '
-          
-          # Download the built APK
-          BUILD_URL=$(eas build:list --platform android --limit 1 --json | jq -r ".[0].artifacts.buildUrl")
-          if [ "$BUILD_URL" != "null" ] && [ -n "$BUILD_URL" ]; then
-            echo "📥 Downloading APK from EAS..."
-            curl -L -o "sentinel-copilot-eas.apk" "$BUILD_URL"
-            echo "✅ APK downloaded from EAS"
-          else
-            echo "❌ No build URL available from EAS"
-            exit 1
-          fi
-          
+        # Always try local build first (more reliable in CI/CD)
+        echo "🔨 Building APK locally with optimized settings..."
+        
+        # Run prebuild
+        npx expo prebuild --platform android --no-install --clear
+        
+        cd android
+        
+        echo "🔧 Configuring optimized local build..."
+        cat > gradle.properties << 'EOF'
+org.gradle.jvmargs=-Xmx8192m -XX:MaxMetaspaceSize=2048m -XX:+UseG1GC
+org.gradle.parallel=false
+org.gradle.daemon=false
+org.gradle.configureondemand=false
+org.gradle.caching=false
+android.useAndroidX=true
+android.enableJetifier=true
+android.compileSdkVersion=33
+android.targetSdkVersion=33
+android.buildToolsVersion=33.0.0
+android.enableR8.fullMode=false
+android.enableBuildCache=false
+EOF
+        
+        echo "🚀 Building release APK..."
+        ./gradlew assembleRelease --no-daemon --stacktrace --info --no-build-cache
+        
+        # Find the generated APK
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          cp "$APK_PATH" "../sentinel-copilot.apk"
+          echo "✅ APK build completed successfully"
+          echo "📱 APK location: $APK_PATH"
+          ls -lh "$APK_PATH"
         else
-          echo "⚠️ No EXPO_TOKEN provided, falling back to local build"
-          
-          # Fallback to local prebuild + gradle
-          echo "🔨 Running local prebuild..."
-          npx expo prebuild --platform android --no-install
-          
-          cd android
-          
-          echo "🔧 Configuring local build..."
-          cat > gradle.properties << 'EOF'
-        org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=2048m
-        org.gradle.parallel=false
-        org.gradle.daemon=false
-        org.gradle.configureondemand=false
-        android.useAndroidX=true
-        android.enableJetifier=true
-        EOF
-          
-          echo "🚀 Building APK locally..."
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          
-          # Find the generated APK
-          APK_PATH=$(find . -name "*.apk" -type f | head -1)
-          if [ -n "$APK_PATH" ]; then
-            cp "$APK_PATH" "../sentinel-copilot-local.apk"
-            echo "✅ Local APK build completed"
-          else
-            echo "❌ Local APK build failed"
-            exit 1
-          fi
+          echo "❌ APK build failed - no APK found"
+          echo "📋 Available files:"
+          find . -name "*.apk" -o -name "*.aab" | head -10
+          exit 1
         fi
         
     - name: 📱 Verify APK
