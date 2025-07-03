@@ -66,7 +66,7 @@ jobs:
     - name: Clean and prebuild
       run: |
         rm -rf android ios
-        npx expo prebuild --platform android --clear
+        npx expo prebuild --platform android
         
     - name: Verify Android project
       run: |
