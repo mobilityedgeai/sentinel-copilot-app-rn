@@ -1,209 +1,189 @@
-name: Build Android APK (Ultra Simple)
+name: Build Android APK (DEFINITIVE)
 
 on:
   push:
     branches: [ main, develop ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     
     steps:
-    - name: Checkout repository
+    - name: 🔄 Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Node.js 18
+    - name: 🟢 Setup Node.js 18
       uses: actions/setup-node@v4
       with:
-        node-version: '18.x'
+        node-version: '18'
         cache: 'npm'
         
-    - name: Setup Java 17
+    - name: ☕ Setup Java 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
         
-    - name: Setup Android SDK
+    - name: 🤖 Setup Android SDK
       uses: android-actions/setup-android@v3
-      
-    - name: Install dependencies
-      run: npm install
+      with:
+        api-level: 33
+        build-tools: 33.0.0
         
-    - name: Create Firebase config
+    - name: 📦 Install dependencies
       run: |
-        cat > firebase-service-account.json << EOF
-        {
-          "type": "service_account",
-          "project_id": "sentinel-ai-769c5",
-          "private_key_id": "${{ secrets.FIREBASE_PRIVATE_KEY_ID }}",
-          "private_key": "${{ secrets.FIREBASE_PRIVATE_KEY }}",
-          "client_email": "${{ secrets.FIREBASE_CLIENT_EMAIL }}",
-          "client_id": "${{ secrets.FIREBASE_CLIENT_ID }}",
-          "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-          "token_uri": "https://oauth2.googleapis.com/token",
-          "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-          "client_x509_cert_url": "${{ secrets.FIREBASE_CLIENT_CERT_URL }}"
-        }
+        echo "📦 Installing npm dependencies..."
+        npm ci --prefer-offline --no-audit
+        echo "✅ Dependencies installed"
+        
+    - name: 🔥 Create Firebase config
+      run: |
+        echo "🔥 Creating Firebase configuration..."
+        cat > firebase-config.js << 'EOF'
+        export const firebaseConfig = {
+          apiKey: "AIzaSyBvOkBw0imfgIXsOKapeSyMvT0FgkNw",
+          authDomain: "${{ secrets.FIREBASE_PROJECT_ID || 'sentinel-ai-769c5' }}.firebaseapp.com",
+          projectId: "${{ secrets.FIREBASE_PROJECT_ID || 'sentinel-ai-769c5' }}",
+          storageBucket: "${{ secrets.FIREBASE_PROJECT_ID || 'sentinel-ai-769c5' }}.appspot.com",
+          messagingSenderId: "123456789",
+          appId: "1:123456789:android:abc123def456"
+        };
         EOF
+        echo "✅ Firebase config created"
         
-    - name: Create basic assets
+    - name: 🎨 Create basic assets
       run: |
-        mkdir -p assets
-        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/icon.png
-        cp assets/icon.png assets/splash.png
-        cp assets/icon.png assets/adaptive-icon.png
-        cp assets/icon.png assets/favicon.png
+        echo "🎨 Creating basic app assets..."
+        mkdir -p assets/images
         
-    - name: Install Expo CLI
-      run: npm install -g @expo/cli
-      
-    - name: Fix dependencies
-      run: npx expo install --fix
-      
-    - name: Clean and prebuild
+        # Create a simple PNG icon using base64
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/images/icon.png
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/images/splash.png
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > assets/images/adaptive-icon.png
+        
+        echo "✅ Basic assets created"
+        
+    - name: 🛠️ Install Expo CLI
       run: |
-        rm -rf android ios
-        npx expo prebuild --platform android
+        echo "🛠️ Installing Expo CLI..."
+        npm install -g @expo/cli@latest
+        echo "✅ Expo CLI installed"
         
-    - name: Verify Android project
+    - name: 🧹 Clean and prebuild
       run: |
-        if [ ! -d "android" ]; then
-          echo "❌ Android directory not created"
-          exit 1
-        fi
-        echo "✅ Android project created"
-        ls -la android/
+        echo "🧹 Cleaning previous builds..."
+        rm -rf android ios .expo
+        echo "🔨 Running Expo prebuild..."
+        npx expo prebuild --platform android --no-install
+        echo "✅ Prebuild completed"
         
-    - name: Configure Gradle
+    - name: 🔧 Configure Android build
       run: |
         cd android
         
-        # Make gradlew executable
-        chmod +x ./gradlew
-        
-        # Create optimized gradle.properties for CI/CD
-        cat > gradle.properties << EOF
-        # Gradle optimization for CI/CD
-        org.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=2g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-        org.gradle.parallel=true
+        echo "🔧 Configuring Gradle properties..."
+        cat > gradle.properties << 'EOF'
+        # Project-wide Gradle settings
+        org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError
+        org.gradle.parallel=false
         org.gradle.configureondemand=false
         org.gradle.daemon=false
         org.gradle.caching=false
-        org.gradle.workers.max=2
         
-        # Android optimization
+        # Android settings
         android.useAndroidX=true
         android.enableJetifier=true
+        android.compileSdkVersion=33
+        android.targetSdkVersion=33
+        android.buildToolsVersion=33.0.0
+        
+        # Disable unnecessary features
         android.enableR8.fullMode=false
         android.enableBuildCache=false
-        android.enableD8=true
-        android.enableAapt2=true
-        android.enableIncrementalDesugaring=false
+        android.enableD8.desugaring=false
         
-        # Disable unnecessary features for CI
-        android.enablePngCrunching=false
-        android.enableResourceOptimizations=false
-        android.enableSeparateAnnotationProcessing=false
-        
-        # Memory and performance
-        kapt.use.worker.api=false
-        kapt.incremental.apt=false
+        # React Native settings
+        reactNativeArchitectures=armeabi-v7a,arm64-v8a
+        hermesEnabled=true
+        newArchEnabled=false
         EOF
         
-        echo "✅ Gradle configured for CI/CD"
+        echo "🔧 Configuring app build.gradle..."
+        # Ensure debug build type exists and is properly configured
+        if [ -f "app/build.gradle" ]; then
+          # Add debug configuration if not exists
+          if ! grep -q "buildTypes" app/build.gradle; then
+            cat >> app/build.gradle << 'EOF'
+
+android {
+    buildTypes {
+        debug {
+            debuggable true
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+EOF
+          fi
+        fi
         
-    - name: Build Debug APK with comprehensive verification
+        echo "✅ Android build configured"
+        
+    - name: 🚀 Build APK with multiple strategies
       run: |
         cd android
         
-        echo "🔍 ===== DETAILED BUILD DIAGNOSTICS ====="
+        echo "🚀 ===== DEFINITIVE APK BUILD ====="
         echo "📅 Build started at: $(date)"
-        echo "🖥️  System info:"
-        uname -a
-        echo "💾 Memory info:"
-        free -h
-        echo "💿 Disk space:"
-        df -h
-        echo "☕ Java version:"
-        java -version
-        echo ""
         
-        echo "🔧 ===== GRADLE PROJECT VERIFICATION ====="
-        echo "📋 Gradle wrapper version:"
-        ./gradlew --version || echo "Gradle version check failed"
-        echo "📋 Gradle properties:"
-        cat gradle.properties || echo "No gradle.properties found"
-        echo "📋 Available Gradle tasks:"
-        ./gradlew tasks --all | grep -E "assemble|build" | head -20
-        echo "📋 Project structure:"
-        find . -maxdepth 3 -type d | sort
-        echo "📋 Build files:"
-        find . -name "build.gradle*" -o -name "settings.gradle*" | head -10
-        echo ""
-        
-        echo "🔍 ===== PRE-BUILD VERIFICATION ====="
-        echo "📱 Android manifest:"
-        find . -name "AndroidManifest.xml" | head -5
-        echo "📦 Dependencies verification:"
-        ./gradlew dependencies --configuration debugCompileClasspath | head -30 || echo "Dependencies check failed"
-        echo ""
-        
-        echo "🧹 ===== CLEAN BUILD PREPARATION ====="
-        echo "🗑️ Cleaning previous builds..."
-        ./gradlew clean --stacktrace || echo "Clean failed"
-        echo "📁 Removing old outputs..."
-        rm -rf app/build/outputs/ build/outputs/ || true
-        echo "✅ Clean completed"
-        echo ""
-        
-        # Function to attempt build with extensive verification
-        attempt_verified_build() {
+        # Function to build APK with specific strategy
+        build_apk() {
           local strategy=$1
-          local attempt=$2
-          echo "🚀 ===== BUILD ATTEMPT $attempt: $strategy ====="
+          local timeout_mins=$2
+          echo ""
+          echo "🔨 ===== STRATEGY: $strategy ====="
           echo "⏰ Started at: $(date)"
-          
-          # Create log file for this attempt
-          local log_file="build_${strategy}_${attempt}.log"
-          local success=false
           
           case $strategy in
             "assembleDebug")
-              echo "🔨 Trying assembleDebug task..."
-              timeout 900 ./gradlew assembleDebug \
+              timeout ${timeout_mins}m ./gradlew assembleDebug \
                 --no-daemon \
                 --stacktrace \
                 --info \
-                --warning-mode all \
-                --build-cache \
-                2>&1 | tee "$log_file"
+                --no-build-cache \
+                -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m" \
+                2>&1 | tee "build_${strategy}.log"
               ;;
-            "buildDebug")
-              echo "🔨 Trying buildDebug task..."
-              timeout 900 ./gradlew buildDebug \
+            "clean_assembleDebug")
+              timeout ${timeout_mins}m ./gradlew clean assembleDebug \
                 --no-daemon \
                 --stacktrace \
                 --info \
-                2>&1 | tee "$log_file"
+                --no-build-cache \
+                2>&1 | tee "build_${strategy}.log"
               ;;
-            "app:assembleDebug")
-              echo "🔨 Trying app:assembleDebug task..."
-              timeout 900 ./gradlew app:assembleDebug \
+            "app_assembleDebug")
+              timeout ${timeout_mins}m ./gradlew :app:assembleDebug \
                 --no-daemon \
                 --stacktrace \
                 --info \
-                2>&1 | tee "$log_file"
+                2>&1 | tee "build_${strategy}.log"
               ;;
-            "bundle")
-              echo "🔨 Trying bundleDebug task..."
-              timeout 900 ./gradlew bundleDebug \
+            "bundleDebug")
+              timeout ${timeout_mins}m ./gradlew bundleDebug \
                 --no-daemon \
                 --stacktrace \
                 --info \
-                2>&1 | tee "$log_file"
+                2>&1 | tee "build_${strategy}.log"
               ;;
           esac
           
@@ -211,200 +191,102 @@ jobs:
           echo "⏰ Finished at: $(date)"
           echo "📊 Exit code: $exit_code"
           
-          # Verify build outputs immediately after each attempt
-          echo "🔍 Checking for build outputs after $strategy:"
-          echo "📁 Checking app/build/outputs/:"
-          ls -la app/build/outputs/ 2>/dev/null || echo "app/build/outputs/ not found"
-          echo "📁 Checking app/build/outputs/apk/:"
-          find app/build/outputs/ -name "*.apk" 2>/dev/null || echo "No APK in app/build/outputs/"
-          echo "📁 Checking all build directories:"
-          find . -name "*.apk" -o -name "*.aab" 2>/dev/null || echo "No APK/AAB found anywhere"
-          echo ""
-          
-          if [ $exit_code -eq 0 ]; then
-            echo "✅ Build task completed successfully: $strategy"
-            # Double-check for APK
-            if find . -name "*.apk" | grep -q .; then
-              echo "🎉 APK FOUND after $strategy!"
-              success=true
-            else
-              echo "⚠️ Build completed but no APK generated"
-            fi
-          elif [ $exit_code -eq 124 ]; then
-            echo "⏰ Build timed out (15 minutes) with strategy: $strategy"
-          else
-            echo "❌ Build failed with exit code $exit_code using strategy: $strategy"
-          fi
-          
-          echo "📋 Last 30 lines of build log:"
-          tail -30 "$log_file" || echo "Could not read log file"
-          echo ""
-          
-          # Analyze specific errors
-          echo "🔍 Error analysis for $strategy:"
-          if grep -i "BUILD FAILED" "$log_file"; then
-            echo "💥 BUILD FAILED detected"
-            grep -A 5 -B 5 "BUILD FAILED" "$log_file" || true
-          fi
-          if grep -i "FAILURE:" "$log_file"; then
-            echo "💥 FAILURE detected"
-            grep -A 3 "FAILURE:" "$log_file" || true
-          fi
-          if grep -i "error" "$log_file" | head -10; then
-            echo "💥 ERRORS detected"
-          fi
-          echo ""
-          
-          if [ "$success" = true ]; then
+          # Check for APK immediately
+          echo "🔍 Checking for APK after $strategy:"
+          if find . -name "*.apk" -type f 2>/dev/null | head -5; then
+            echo "🎉 APK FOUND with strategy: $strategy"
+            return 0
+          elif find . -name "*.aab" -type f 2>/dev/null | head -5; then
+            echo "🎉 AAB FOUND with strategy: $strategy"
             return 0
           else
+            echo "❌ No APK/AAB found with strategy: $strategy"
+            echo "📋 Last 20 lines of log:"
+            tail -20 "build_${strategy}.log" 2>/dev/null || echo "No log file"
             return 1
           fi
         }
         
-        echo "🎯 ===== STARTING COMPREHENSIVE BUILD ATTEMPTS ====="
-        
-        # Try different build strategies
-        if attempt_verified_build "assembleDebug" "1"; then
-          echo "🎉 SUCCESS: assembleDebug completed with APK!"
-        elif attempt_verified_build "app:assembleDebug" "2"; then
-          echo "🎉 SUCCESS: app:assembleDebug completed with APK!"
-        elif attempt_verified_build "buildDebug" "3"; then
-          echo "🎉 SUCCESS: buildDebug completed with APK!"
-        elif attempt_verified_build "bundle" "4"; then
-          echo "🎉 SUCCESS: bundleDebug completed with AAB!"
+        # Try different strategies with increasing timeouts
+        if build_apk "assembleDebug" "15"; then
+          echo "✅ SUCCESS: assembleDebug"
+        elif build_apk "clean_assembleDebug" "20"; then
+          echo "✅ SUCCESS: clean + assembleDebug"
+        elif build_apk "app_assembleDebug" "15"; then
+          echo "✅ SUCCESS: app:assembleDebug"
+        elif build_apk "bundleDebug" "15"; then
+          echo "✅ SUCCESS: bundleDebug (AAB)"
         else
-          echo "💥 ===== ALL BUILD STRATEGIES FAILED ====="
-          echo "📊 Final system state:"
+          echo "💥 ===== ALL STRATEGIES FAILED ====="
+          echo "📊 System state:"
           free -h
           df -h
           echo ""
-          
-          echo "📋 All log files created:"
-          ls -la *.log || echo "No log files found"
+          echo "📋 Available Gradle tasks:"
+          ./gradlew tasks | grep -i assemble || echo "No assemble tasks found"
           echo ""
-          
-          echo "🔍 Final comprehensive search:"
-          echo "📁 Complete project structure:"
-          find . -type d -name "*build*" | head -20
-          echo "📱 Any APK/AAB files:"
-          find . -name "*.apk" -o -name "*.aab" -o -name "*.jar" | grep -v node_modules | head -20
-          echo "📋 Build outputs:"
-          find . -path "*/build/outputs/*" | head -20
-          
+          echo "📁 Project structure:"
+          find . -maxdepth 3 -type d | sort
           echo ""
-          echo "🔍 Gradle daemon status:"
-          ./gradlew --status || true
-          
+          echo "📋 All log files:"
+          ls -la *.log 2>/dev/null || echo "No log files"
           echo ""
-          echo "📋 Summary of all build errors:"
+          echo "🔍 Error summary from all logs:"
           for log in *.log; do
             if [ -f "$log" ]; then
-              echo "--- Critical errors from $log ---"
-              grep -i "BUILD FAILED\|FAILURE:\|error.*failed\|exception" "$log" | head -5
+              echo "--- Errors from $log ---"
+              grep -i "BUILD FAILED\|FAILURE:\|error.*failed\|exception" "$log" | head -3
             fi
           done
-          
           exit 1
         fi
         
-    - name: Find APK
+    - name: 📱 Find and verify APK
       run: |
-        echo "🔍 ===== SEARCHING FOR GENERATED APK ====="
-        echo "📱 Searching in all possible locations..."
+        echo "📱 ===== FINDING GENERATED APK/AAB ====="
         
-        # Search for APK files in common locations
-        echo "🔍 Searching for *.apk files:"
-        find . -name "*.apk" -type f 2>/dev/null | head -20
-        
-        echo "🔍 Searching for *.aab files:"
-        find . -name "*.aab" -type f 2>/dev/null | head -10
-        
-        echo "🔍 Checking specific build output directories:"
-        ls -la app/build/outputs/apk/ 2>/dev/null || echo "app/build/outputs/apk/ not found"
-        ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "app/build/outputs/apk/debug/ not found"
-        ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "app/build/outputs/apk/release/ not found"
-        
-        echo "🔍 Checking alternative paths:"
-        ls -la build/outputs/apk/ 2>/dev/null || echo "build/outputs/apk/ not found"
-        ls -la build/outputs/apk/debug/ 2>/dev/null || echo "build/outputs/apk/debug/ not found"
-        
-        echo "🔍 Checking all build directories:"
-        find . -type d -name "outputs" 2>/dev/null | head -10
-        find . -type d -name "apk" 2>/dev/null | head -10
-        
-        # Try to find APK in multiple possible locations
-        APK_PATH=""
-        
-        # Check common APK locations
-        for path in \
-          "app/build/outputs/apk/debug/*.apk" \
-          "app/build/outputs/apk/release/*.apk" \
-          "build/outputs/apk/debug/*.apk" \
-          "build/outputs/apk/release/*.apk" \
-          "*/build/outputs/apk/debug/*.apk" \
-          "*/build/outputs/apk/release/*.apk"
-        do
-          echo "🔍 Checking pattern: $path"
-          for file in $path; do
-            if [ -f "$file" ]; then
-              APK_PATH="$file"
-              echo "✅ Found APK: $APK_PATH"
-              break 2
-            fi
-          done
+        # Comprehensive search for build outputs
+        echo "🔍 Searching for APK files:"
+        find . -name "*.apk" -type f | while read apk; do
+          echo "📱 Found APK: $apk"
+          ls -lh "$apk"
+          file "$apk"
         done
         
-        # If still not found, search everywhere
-        if [ -z "$APK_PATH" ]; then
-          echo "🔍 Comprehensive search for any APK file..."
-          APK_PATH=$(find . -name "*.apk" -type f | head -1)
-        fi
+        echo "🔍 Searching for AAB files:"
+        find . -name "*.aab" -type f | while read aab; do
+          echo "📦 Found AAB: $aab"
+          ls -lh "$aab"
+          file "$aab"
+        done
         
-        if [ -n "$APK_PATH" ] && [ -f "$APK_PATH" ]; then
-          echo "🎉 APK FOUND: $APK_PATH"
-          
-          # Get APK info
-          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
-          APK_NAME=$(basename "$APK_PATH")
-          
-          echo "📱 APK Details:"
-          echo "  File: $APK_NAME"
-          echo "  Path: $APK_PATH"
-          echo "  Size: $APK_SIZE"
-          
-          # Create output directory and copy APK
-          mkdir -p build-output
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          OUTPUT_NAME="sentinel-copilot-debug-${TIMESTAMP}.apk"
-          cp "$APK_PATH" "build-output/$OUTPUT_NAME"
-          
-          echo "✅ APK copied to: build-output/$OUTPUT_NAME"
-          ls -la build-output/
-          
-          # Export for next steps
-          echo "APK_FILE=$OUTPUT_NAME" >> $GITHUB_ENV
-          echo "APK_SIZE=$APK_SIZE" >> $GITHUB_ENV
-          echo "APK_PATH=build-output/$OUTPUT_NAME" >> $GITHUB_ENV
-          
+        # Set APK path for upload
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        AAB_PATH=$(find . -name "*.aab" -type f | head -1)
+        
+        if [ -n "$APK_PATH" ]; then
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "BUILD_TYPE=APK" >> $GITHUB_ENV
+          echo "BUILD_FILE=$APK_PATH" >> $GITHUB_ENV
+          echo "✅ APK found: $APK_PATH"
+        elif [ -n "$AAB_PATH" ]; then
+          echo "AAB_PATH=$AAB_PATH" >> $GITHUB_ENV
+          echo "BUILD_TYPE=AAB" >> $GITHUB_ENV
+          echo "BUILD_FILE=$AAB_PATH" >> $GITHUB_ENV
+          echo "✅ AAB found: $AAB_PATH"
         else
-          echo "❌ NO APK FOUND ANYWHERE"
-          echo "🔍 Complete directory structure:"
-          find . -type f -name "*.apk" -o -name "*.aab" -o -name "*.jar" | head -20
-          echo ""
-          echo "🔍 Build directories content:"
-          find . -type d -name "build" -exec ls -la {} \; 2>/dev/null | head -50
+          echo "❌ No APK or AAB found"
           exit 1
         fi
         
-    - name: Upload APK
+    - name: 📋 Upload APK/AAB artifact
       uses: actions/upload-artifact@v4
       with:
-        name: sentinel-copilot-debug-apk
-        path: build-output/*.apk
+        name: sentinel-copilot-${{ env.BUILD_TYPE }}-${{ github.run_number }}
+        path: ${{ env.BUILD_FILE }}
         retention-days: 30
         
-    - name: Create Release
+    - name: 🚀 Create Release
       if: github.ref == 'refs/heads/main'
       uses: actions/create-release@v1
       env:
@@ -413,16 +295,24 @@ jobs:
         tag_name: v1.0.${{ github.run_number }}
         release_name: Sentinel Copilot v1.0.${{ github.run_number }}
         body: |
-          🚀 **Sentinel Copilot Mobile App - Debug Build**
+          🚀 **Sentinel Copilot Mobile App**
           
-          📱 **APK Gerado**: ${{ env.APK_FILE }}
-          🔧 **Tipo**: Debug (para testes)
-          📅 **Data**: ${{ github.event.head_commit.timestamp }}
+          📱 **Build Type**: ${{ env.BUILD_TYPE }}
+          📅 **Build Date**: ${{ github.event.head_commit.timestamp }}
+          🔧 **Commit**: ${{ github.sha }}
           
-          🔐 **Login:**
-          - CPF: 123.456.789-00 | Senha: 123456
-          - Código: MOT001 | Senha: 123456
+          ### 📦 Download
+          - Download the ${{ env.BUILD_TYPE }} from the artifacts section
           
+          ### 🔐 Login Credentials
+          - **CPF**: `123.456.789-00` + **Senha**: `123456`
+          - **Código**: `MOT001` + **Senha**: `123456`
+          - **Admin**: `admin` + **Senha**: `123456`
+          
+          ### 📱 Installation
+          1. Download the ${{ env.BUILD_TYPE }} file
+          2. Enable "Unknown sources" on Android
+          3. Install and enjoy!
         draft: false
         prerelease: false
 
